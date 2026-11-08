@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14161b">
+<title>Lumina Photo Editor</title>
+<style>
+:root{color-scheme:dark;--bg:#14161b;--pan:#1b1e25;--line:#2b303a;--tx:#eef0f4;--mut:#8f97a6;--ac:#ffb43c;--acx:#1a1203}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--tx);font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden}
+#app{height:100%;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top,0)}
+header{display:flex;align-items:center;gap:8px;padding:10px 12px}
+header h1{font-size:18px;margin:0;flex:1;font-weight:700;letter-spacing:.2px}
+button,.btn{font:inherit;color:var(--tx);background:var(--pan);border:1px solid var(--line);border-radius:10px;padding:8px 14px;cursor:pointer}
+button.pri,.btn.pri{background:var(--ac);color:var(--acx);border-color:var(--ac);font-weight:700}
+button:focus-visible,input:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
+#stage{flex:1;min-height:0;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;touch-action:none;user-select:none;-webkit-user-select:none}
+#cv{max-width:100%;max-height:100%;width:100%;height:100%;object-fit:contain;display:none}
+#empty{text-align:center;padding:24px;color:var(--mut)}
+#empty b{display:block;color:var(--tx);font-size:18px;margin-bottom:6px}
+#empty .btn{display:inline-block;margin-top:14px}
+#ov{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;pointer-events:none;display:none}
+#tin{width:100%;font:inherit;color:var(--tx);background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:9px 12px;margin:6px 0}
+#hint{position:absolute;bottom:6px;left:0;right:0;text-align:center;font-size:12px;color:var(--mut);pointer-events:none}
+#dock{background:var(--pan);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0)}
+#tabs{display:flex;overflow-x:auto;gap:2px;padding:6px 8px;scrollbar-width:none}
+#tabs button{flex:none;border:0;background:none;color:var(--mut);padding:8px 12px;border-radius:8px}
+#tabs button.on{color:var(--acx);background:var(--ac);font-weight:700}
+#panel{height:232px;overflow-y:auto;padding:4px 14px 12px}
+.row{display:grid;grid-template-columns:104px 1fr 40px;align-items:center;gap:8px;padding:5px 0}
+.row label{color:var(--mut);font-size:13px}
+.row output{font-size:12px;color:var(--mut);text-align:right;font-variant-numeric:tabular-nums}
+.sl{position:relative;height:36px;touch-action:pan-y;cursor:ew-resize}
+.sl i,.sl b{position:absolute;top:17px;height:3px;border-radius:2px}
+.sl i{left:0;right:0;background:var(--line)}.sl b{background:var(--ac)}
+.sl u{position:absolute;top:9px;width:18px;height:18px;margin-left:-9px;border-radius:50%;background:var(--ac)}
+header button,header .btn{padding:8px 10px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;padding:8px 0}
+.chips button.on{border-color:var(--ac);color:var(--ac)}
+.sw{width:30px;height:30px;padding:0;border-radius:50%;border:2px solid var(--line)}
+.sw.on{border-color:var(--tx)}
+#modal{position:fixed;inset:0;background:rgba(0,0,0,.9);display:none;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:16px;z-index:5}
+#modal img{max-width:100%;max-height:70%;border-radius:8px}
+#modal p{margin:0;text-align:center;color:var(--mut);font-size:13px}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>Lumina</h1>
+    <button id="undo" aria-label="Undo">&#8630;</button><button id="redo" aria-label="Redo">&#8631;</button><button id="reset">Reset</button>
+    <label class="btn" for="file">Open</label>
+    <input id="file" type="file" accept="image/*" hidden>
+    <button class="pri" id="save">Save</button>
+  </header>
+  <div id="stage">
+    <canvas id="cv"></canvas><canvas id="ov"></canvas>
+    <div id="empty"><b>Photo kholo</b>Open dabao aur gallery se photo chuno.<br><label class="btn pri" for="file">Open photo</label></div>
+    <div id="hint"></div>
+  </div>
+  <div id="dock">
+    <div id="tabs"></div>
+    <div id="panel"></div>
+  </div>
+</div>
+<div id="modal"><img id="out" alt="Edited photo"><p>Photo ko lamba dabake rakho aur "Save image / Download image" chuno.</p><button id="close">Close</button></div>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+
+/* ---------- slider definitions: key -> [label, min, max] ---------- */
+const SL = {
+  exposure:["Exposure",-2,2], brightness:["Brightness",-1,1], contrast:["Contrast",-1,1],
+  highlights:["Highlights",-1,1], shadows:["Shadows",-1,1], fade:["Fade",0,1],
+  temp:["Temp",-1,1], tint:["Tint",-1,1], saturation:["Saturation",-1,1], vibrance:["Vibrance",-1,1], hue:["Hue",-180,180],
+  sHue:["Shadow color",0,1], sAmt:["Shadow tone",0,1], hHue:["Highlight color",0,1], hAmt:["Highlight tone",0,1],
+  sharp:["Sharpness",0,1], grain:["Grain",0,1], vig:["Vignette",-1,1],
+  bril:["Brilliance",-1,1], texr:["Texture",-1,1], struc:["Structure",-1,1], blur:["Blur",0,1],
+  fresh:["Freshness",0,1], film:["Faded film",0,1], amb:["Ambient light",0,1], flash:["Flash",0,1], tyn:["Tyndall",0,1], canv:["Canvas texture",0,1],
+  glow:["Glow",0,1], bloom:["Highlight glow",0,1], dehaze:["Dehaze",-1,1], ca:["Color split",0,1], leak:["Light leak",0,1],
+  lexp:["Exposure",-2,2], lcon:["Contrast",-1,1], lsat:["Saturation",-1,1], ltemp:["Temp",-1,1],
+  skin:["Skin smooth",0,1], wrk:["Wrinkles",0,1], skb:["Skin bright",0,1], skt:["Skin tone",-1,1], skg:["Skin shine",0,1],
+  tilt:["Tilt blur",0,1], border:["Border",0,1], lsoft:["Soften",0,1], lshp:["Sharpen",0,1],
+  mono:["Black & white",0,1], sepia:["Sepia",0,1], poster:["Posterize",0,1]
+};
+const TABS = {
+  filters:{name:"Filters"},
+  auto:{name:"Auto"},
+  light:{name:"Light", keys:["exposure","brightness","bril","contrast","highlights","shadows","fade"]},
+  color:{name:"Color", keys:["temp","tint","saturation","vibrance","hue","fresh","sHue","sAmt","hHue","hAmt"]},
+  hsl:{name:"HSL"},
+  detail:{name:"Detail", keys:["sharp","texr","struc","blur"]},
+  fx:{name:"Effects", keys:["glow","bloom","dehaze","grain","vig","film","amb","flash","tyn","canv","ca","leak","tilt","border","mono","sepia","poster"]},
+  curve:{name:"Curve"},
+  sel:{name:"Selective", keys:["lexp","lcon","lsat","ltemp","lsoft","lshp"]},
+  retouch:{name:"Retouch", keys:["skin","wrk","skb","skt","skg"]},
+  text:{name:"Text"},
+  crop:{name:"Crop"}
+};
+const DEF = () => { const o = {}; for (const k in SL) o[k] = 0; o.sHue = .55; o.hHue = .08; return o; };
+
+/* ---------- own presets (khud ke banaye) ---------- */
+const PRESETS = {
+  "Warm Golden":{temp:.35,tint:.05,contrast:.1,saturation:.1,highlights:-.15,fade:.1,vig:-.2,hAmt:.4,hHue:.09},
+  "Moody Teal":{contrast:.2,saturation:-.1,shadows:-.1,temp:-.1,sAmt:.6,sHue:.5,hAmt:.4,hHue:.08,vig:-.4,fade:.15},
+  "Vintage Film":{fade:.35,temp:.2,saturation:-.2,contrast:-.05,grain:.35,vig:-.3},
+  "Clean Bright":{exposure:.25,contrast:.1,vibrance:.3,shadows:.3,highlights:-.2,sharp:.3},
+  "B&W Drama":{saturation:-1,contrast:.35,shadows:-.2,vig:-.4,grain:.2,fade:.05},
+  "Soft Pastel":{exposure:.2,contrast:-.2,saturation:-.15,fade:.3,temp:.1,vibrance:.2},
+  "Cinematic":{contrast:.25,saturation:-.05,sAmt:.5,sHue:.52,hAmt:.5,hHue:.1,vig:-.35},
+  "Dreamy Glow":{glow:.6,bloom:.3,exposure:.15,contrast:-.1,saturation:.1,fade:.1,temp:.1},
+  "Golden Hour":{temp:.5,exposure:.1,highlights:-.2,shadows:.2,saturation:.15,leak:.35,hAmt:.4,hHue:.1,vig:-.25,bloom:.2},
+  "Neon Night":{contrast:.3,saturation:.3,sAmt:.7,sHue:.75,hAmt:.6,hHue:.9,exposure:-.1,glow:.35,ca:.3,vig:-.4},
+  "Matte Black":{contrast:.15,fade:.4,saturation:-.3,shadows:.1,film:.4,vig:-.2},
+  "Pastel Pink":{exposure:.2,temp:.15,tint:.2,saturation:-.1,fade:.2,contrast:-.15,glow:.25,hAmt:.3,hHue:.95},
+  "Fresh Green":{fresh:.8,vibrance:.3,contrast:.1,exposure:.1,temp:-.1,sharp:.2},
+  "Vivid Pop":{saturation:.35,vibrance:.3,contrast:.2,struc:.3,sharp:.3},
+  "Noir":{saturation:-1,contrast:.5,exposure:-.1,vig:-.5,grain:.3,struc:.3},
+  "Retro 90s":{fade:.25,temp:.25,saturation:.1,grain:.4,leak:.5,ca:.15,vig:-.3,canv:.15},
+  "Cool Morning":{temp:-.3,exposure:.15,bril:.3,tyn:.3,fresh:.3,contrast:-.05},
+  "Soft Skin":{bril:.25,glow:.3,texr:-.3,exposure:.1,temp:.1,saturation:-.05},
+  "Sunset Leak":{temp:.4,tint:.1,saturation:.2,leak:.7,glow:.2,fade:.1,vig:-.3},
+  "Portrait Soft":{skin:.5,skb:.2,skg:.2,glow:.2,bril:.2,exposure:.1},
+  "Glam Skin":{skin:.7,wrk:.4,skb:.3,skg:.4,skt:.2,vibrance:.15,glow:.15},
+  "Miniature":{tilt:.8,saturation:.3,contrast:.15,sharp:.2},
+  "Polaroid":{border:.7,fade:.25,temp:.2,grain:.25,vig:-.2}
+};
+const BANDS = [["Red",0],["Orange",30],["Yellow",60],["Green",120],["Aqua",180],["Blue",240],["Purple",270],["Magenta",300]];
+const ASPECTS = [["Original",0],["1:1",1],["4:5",.8],["3:4",.75],["9:16",.5625],["16:9",16/9]];
+
+/* ---------- state ---------- */
+let gl, prog, tex, U = {}, orig = null, raf = 0, cmp = false, srcCv = null, H = [], hi = -1;
+let P = DEF(), HSL = BANDS.map(() => [0,0,0]), band = 0, tab = "filters", preset = "";
+let tf = {rot:0, fx:1, fy:1, ar:0}, cw = 1, ch = 1;
+const NC = () => ({m:[[0,0],[1,1]], r:[[0,0],[1,1]], g:[[0,0],[1,1]], b:[[0,0],[1,1]]});
+/* ---- text overlay ---- */
+let TX = {t:"", size:.08, color:"#ffffff", font:"sans-serif", x:.5, y:.5, bold:true, shadow:true};
+function paintTxt(x){ if(!TX.t) return; const px = Math.round(TX.size*cw);
+  x.font = `${TX.bold ? "bold " : ""}${px}px ${TX.font}`; x.textAlign = "center"; x.textBaseline = "middle"; x.fillStyle = TX.color;
+  if(TX.shadow){ x.shadowColor = "rgba(0,0,0,.6)"; x.shadowBlur = px*.15; } x.fillText(TX.t, TX.x*cw, TX.y*ch); }
+function drawTxt(){ const o = $("#ov"); o.width = cw; o.height = ch; o.style.display = TX.t ? "block" : "none"; paintTxt(o.getContext("2d")); }
+$("#panel").addEventListener("input", e => { if(e.target.id === "tin"){ TX.t = e.target.value; drawTxt(); } });
+let curves = NC(), cc = "m", ctex, mtex, mcv, mctx, selTool = "brush", brSz = .09, selShow = true, paint = null, curOn = false;
+/* ---- curve ---- */
+function spline(pts){ const n = pts.length, X = pts.map(p => p[0]), Y = pts.map(p => p[1]), d = [], m = [];
+  for(let i = 0; i < n-1; i++) d[i] = (Y[i+1]-Y[i]) / (X[i+1]-X[i]);
+  m[0] = d[0]; m[n-1] = d[n-2]; for(let i = 1; i < n-1; i++) m[i] = d[i-1]*d[i] <= 0 ? 0 : (d[i-1]+d[i]) / 2;
+  return t => { if(t <= X[0]) return Y[0]; if(t >= X[n-1]) return Y[n-1]; let i = 0; while(t > X[i+1]) i++;
+    const h = X[i+1]-X[i], u = (t-X[i]) / h, u2 = u*u, u3 = u2*u;
+    return (2*u3-3*u2+1)*Y[i] + (u3-2*u2+u)*h*m[i] + (-2*u3+3*u2)*Y[i+1] + (u3-u2)*h*m[i+1]; }; }
+function lut(){
+  const f = ["m","r","g","b"].map(k => spline(curves[k])), a = new Uint8Array(1024), cl = v => Math.max(0, Math.min(1, v));
+  for(let i = 0; i < 256; i++){ const v = cl(f[0](i/255)); for(let j = 0; j < 3; j++) a[i*4+j] = Math.round(cl(f[j+1](v)) * 255); a[i*4+3] = 255; }
+  curOn = JSON.stringify(curves) !== JSON.stringify(NC());
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, ctex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, a); gl.activeTexture(gl.TEXTURE0);
+}
+function drawCur(){
+  const c = $("#cvc"); if(!c) return; const x = c.getContext("2d"), W = c.width, Hh = c.height;
+  x.clearRect(0, 0, W, Hh); x.strokeStyle = "#2b303a"; x.lineWidth = 1;
+  for(let i = 1; i < 4; i++){ x.beginPath(); x.moveTo(i*W/4, 0); x.lineTo(i*W/4, Hh); x.moveTo(0, i*Hh/4); x.lineTo(W, i*Hh/4); x.stroke(); }
+  const col = {m:"#eef0f4", r:"#ff5a5a", g:"#5adf7a", b:"#5a9aff"}[cc], pts = curves[cc], f = spline(pts);
+  x.strokeStyle = col; x.lineWidth = 3; x.beginPath();
+  for(let i = 0; i <= 100; i++){ const t = i/100, y = Math.max(0, Math.min(1, f(t))); i ? x.lineTo(t*W, (1-y)*Hh) : x.moveTo(t*W, (1-y)*Hh); } x.stroke();
+  x.fillStyle = col; pts.forEach(p => { x.beginPath(); x.arc(p[0]*W, (1-p[1])*Hh, 9, 0, 7); x.fill(); });
+}
+/* ---- selective mask ---- */
+function mkMask(){ mcv = document.createElement("canvas"); mcv.width = 512; mcv.height = Math.max(1, Math.round(512*ch/cw));
+  mctx = mcv.getContext("2d"); mctx.fillStyle = "#000"; mctx.fillRect(0, 0, mcv.width, mcv.height); upMask(); }
+function upMask(){ gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, mtex); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, mcv); gl.activeTexture(gl.TEXTURE0); schedule(); }
+function mpos(e){ const r = $("#cv").getBoundingClientRect(), sc = Math.min(r.width/cw, r.height/ch), dw = cw*sc, dh = ch*sc;
+  return [(e.clientX - r.left - (r.width-dw)/2) / dw, (e.clientY - r.top - (r.height-dh)/2) / dh]; }
+function selDown(e){ const [x, y] = mpos(e); paint = {x, y}; $("#stage").setPointerCapture(e.pointerId); selMove(e); }
+function selMove(e){
+  if(!paint) return; if(tab === "text"){ const [tx, ty] = mpos(e); TX.x = tx; TX.y = ty; drawTxt(); return; }
+  const [x, y] = mpos(e), W = mcv.width, Hh = mcv.height;
+  if(selTool === "brush" || selTool === "erase"){
+    const r = brSz*W, X = x*W, Y = y*Hh, c = selTool === "brush" ? "255,255,255" : "0,0,0", g = mctx.createRadialGradient(X, Y, 0, X, Y, r);
+    g.addColorStop(0, `rgba(${c},.5)`); g.addColorStop(1, `rgba(${c},0)`); mctx.fillStyle = g; mctx.fillRect(X-r, Y-r, 2*r, 2*r);
+  } else {
+    mctx.fillStyle = "#000"; mctx.fillRect(0, 0, W, Hh);
+    const ax = paint.x*W, ay = paint.y*Hh, bx = x*W, by = y*Hh;
+    const g = selTool === "radial" ? mctx.createRadialGradient(ax, ay, 0, ax, ay, Math.max(4, Math.hypot(bx-ax, by-ay))) : mctx.createLinearGradient(ax, ay, bx, by);
+    g.addColorStop(0, "#fff"); g.addColorStop(1, "#000"); mctx.fillStyle = g; mctx.fillRect(0, 0, W, Hh);
+  }
+  upMask();
+}
+const snap = () => JSON.stringify({P, HSL, tf, preset, cv:curves});
+function pushHist(){ if(!orig) return; const s = snap(); if(H[hi] === s) return; H = H.slice(0, hi+1); H.push(s); hi = H.length-1; if(H.length > 60){ H.shift(); hi--; } }
+function goHist(n){ if(!orig || n < 0 || n >= H.length) return; hi = n; const o = JSON.parse(H[n]); const re = JSON.stringify(o.tf) !== JSON.stringify(tf);
+  P = o.P; HSL = o.HSL; tf = o.tf; preset = o.preset; curves = o.cv; lut(); if(re) build(); renderPanel(); schedule(); }
+function smart(){
+  const s = document.createElement("canvas"); s.width = 64; s.height = Math.max(1, Math.round(64*ch/cw));
+  const x = s.getContext("2d"); x.drawImage(srcCv, 0, 0, s.width, s.height);
+  const d = x.getImageData(0, 0, s.width, s.height).data, a = [];
+  for(let i = 0; i < d.length; i += 4) a.push((.2126*d[i] + .7152*d[i+1] + .0722*d[i+2]) / 255);
+  a.sort((p, q) => p - q);
+  const lo = a[a.length*.02|0], up = a[a.length*.98|0], m = a[a.length>>1];
+  P.exposure = Math.max(-1, Math.min(1, Math.log2(.45/Math.max(.05, m)) * .6));
+  P.contrast = Math.max(0, Math.min(.4, (.9/Math.max(.2, up-lo) - 1) * .5));
+  P.vibrance = .2; P.shadows = m < .35 ? .3 : .1; P.highlights = up > .95 ? -.2 : 0;
+}
+
+/* ---------- WebGL ---------- */
+const FS = `
+precision highp float;
+uniform sampler2D t; uniform vec2 px;
+uniform float exposure,brightness,contrast,highlights,shadows,fade,temp,tint,saturation,vibrance,hue,sHue,sAmt,hHue,hAmt,sharp,grain,vig,bril,texr,struc,blur,fresh,film,amb,flash,tyn,canv,glow,bloom,dehaze,ca,leak,lexp,lcon,lsat,ltemp,skin,wrk,skb,skt,skg,tilt,border,lsoft,lshp,mono,sepia,poster;
+uniform sampler2D cur,msk; uniform float cOn,showM;
+uniform vec3 bands[8];
+varying vec2 uv;
+vec3 rgb2hsv(vec3 c){vec4 K=vec4(0.,-1./3.,2./3.,-1.);vec4 p=mix(vec4(c.bg,K.wz),vec4(c.gb,K.xy),step(c.b,c.g));vec4 q=mix(vec4(p.xyw,c.r),vec4(c.r,p.yzx),step(p.x,c.r));float d=q.x-min(q.w,q.y);float e=1e-10;return vec3(abs(q.z+(q.w-q.y)/(6.*d+e)),d/(q.x+e),q.x);}
+vec3 hsv2rgb(vec3 c){vec4 K=vec4(1.,2./3.,1./3.,3.);vec3 p=abs(fract(c.xxx+K.xyz)*6.-K.www);return c.z*mix(K.xxx,clamp(p-K.xxx,0.,1.),c.y);}
+float luma(vec3 c){return dot(c,vec3(.2126,.7152,.0722));}
+vec3 bl(float r){vec2 o=px*r;return (texture2D(t,uv+vec2(o.x,0.)).rgb+texture2D(t,uv-vec2(o.x,0.)).rgb+texture2D(t,uv+vec2(0.,o.y)).rgb+texture2D(t,uv-vec2(0.,o.y)).rgb+texture2D(t,uv+o).rgb+texture2D(t,uv-o).rgb+texture2D(t,uv+vec2(o.x,-o.y)).rgb+texture2D(t,uv+vec2(-o.x,o.y)).rgb)*.125;}
+void main(){
+  vec3 c=texture2D(t,uv).rgb;
+  float S=1./(px.x*1000.);
+  if(ca>0.){vec2 o=(uv-.5)*ca*.02;c.r=texture2D(t,uv+o).r;c.b=texture2D(t,uv-o).b;}
+  if(sharp>0.||texr!=0.){c+=(c-bl(1.5*S))*(sharp*2.5+texr*2.);}
+  if(struc!=0.||amb>0.){vec3 b=bl(8.*S);c+=(c-b)*struc*1.5;c+=b*b*amb*.6;}
+  if(blur>0.){c=mix(c,(bl(4.*S)+bl(9.*S))*.5,blur);}
+  if(tilt>0.){c=mix(c,(bl(5.*S)+bl(11.*S))*.5,tilt*smoothstep(.12,.42,abs(uv.y-.5)));}
+  vec3 hs=rgb2hsv(clamp(c,0.,1.));
+  float sk=(1.-smoothstep(.08,.14,hs.x))*smoothstep(.1,.2,hs.y)*(1.-smoothstep(.65,.8,hs.y))*smoothstep(.2,.35,hs.z);
+  if(sk>0.){
+    if(skin>0.||wrk>0.){vec3 sb=(bl(2.5*S)+bl(5.*S))*.5;float e=1.-smoothstep(.02,.12,abs(luma(c)-luma(sb)));c=mix(c,sb,skin*sk*e*.9);c=mix(c,bl(1.5*S),wrk*sk*e*.8);}
+    c*=1.+skb*sk*.25; c.r*=1.+skt*sk*.15; c.b*=1.-skt*sk*.15; c+=skg*sk*smoothstep(.5,1.,luma(c))*.3;
+  }
+  c*=pow(2.,exposure);
+  c+=brightness*.3;
+  c=pow(max(c,0.),vec3(1.-bril*.5));
+  c.r*=1.+temp*.3; c.b*=1.-temp*.3; c.g*=1.-tint*.25;
+  float l=luma(c);
+  float sh=1.-smoothstep(0.,.55,l), hi=smoothstep(.45,1.,l);
+  c*=1.+shadows*.7*sh;
+  c*=1.+highlights*.4*hi;
+  c=(c-.5)*(1.+contrast)+.5;
+  c=c*(1.-fade*.25)+fade*.12;
+  l=luma(c);
+  float s=max(c.r,max(c.g,c.b))-min(c.r,min(c.g,c.b));
+  c=mix(vec3(l),c,1.+saturation);
+  c=mix(vec3(l),c,1.+vibrance*(1.-s));
+  c=c*(1.+fresh*vec3(-.04,.05,.03))+fresh*.03;
+  c=mix(c,vec3(luma(c)),film*.25); c=c*(1.-film*.2)+film*vec3(.08,.07,.09);
+  c=clamp(c,0.,1.);
+  vec3 h=rgb2hsv(c);
+  h.x=fract(h.x+hue/360.);
+  for(int i=0;i<8;i++){
+    float ctr=float(i==0?0:i==1?30:i==2?60:i==3?120:i==4?180:i==5?240:i==6?270:300)/360.;
+    float d=abs(h.x-ctr); d=min(d,1.-d);
+    float w=max(0.,1.-d/.1)*smoothstep(0.,.15,h.y);
+    h.x=fract(h.x+bands[i].x*.08*w);
+    h.y=clamp(h.y*(1.+bands[i].y*w),0.,1.);
+    h.z=clamp(h.z*(1.+bands[i].z*.5*w),0.,1.);
+  }
+  c=hsv2rgb(h);
+  l=luma(c);
+  c+=(hsv2rgb(vec3(sHue,1.,1.))-.5)*sAmt*.25*(1.-smoothstep(0.,.55,l));
+  c+=(hsv2rgb(vec3(hHue,1.,1.))-.5)*hAmt*.25*smoothstep(.45,1.,l);
+  c=clamp(c,0.,1.);
+  if(cOn>.5){vec3 u=c*.99609+.00195;c=vec3(texture2D(cur,vec2(u.r,.5)).r,texture2D(cur,vec2(u.g,.5)).g,texture2D(cur,vec2(u.b,.5)).b);}
+  float mk=texture2D(msk,uv).r;
+  if(mk>0.){vec3 d=c*pow(2.,lexp);d=(d-.5)*(1.+lcon)+.5;d=mix(vec3(luma(d)),d,1.+lsat);d.r*=1.+ltemp*.25;d.b*=1.-ltemp*.25;if(lsoft>0.)d=mix(d,bl(4.*S),lsoft);if(lshp>0.)d+=(d-bl(2.*S))*lshp*2.;c=mix(c,d,mk);}
+  if(dehaze!=0.){c=(c-.1*dehaze)/(1.-.1*dehaze);c=mix(vec3(luma(c)),c,1.+dehaze*.2);}
+  if(glow>0.||bloom>0.){vec3 g=(bl(5.*S)+bl(12.*S)+bl(24.*S))/3.;c=mix(c,1.-(1.-c)*(1.-g),glow*.8);c+=max(g-.5,0.)*bloom*1.2;}
+  c+=vec3(1.,.45,.2)*pow(max(0.,1.-distance(uv,vec2(1.,.9))*1.4),2.)*leak*.8;
+  c=mix(c,vec3(1.,.2,.2),mk*.45*showM);
+  float fm=1.-smoothstep(0.,.75,distance(uv,vec2(.5)));
+  c=mix(c*(1.+flash*.5*fm),vec3(1.),flash*.12*fm);
+  float rays=pow(.5+.5*sin((uv.x-uv.y*.5)*20.),2.)*uv.y*(1.-uv.x*.6);
+  c+=vec3(1.,.8,.55)*rays*tyn*.4;
+  vec2 q=uv/(px*S*2.); float cn=fract(sin(dot(floor(q),vec2(12.9898,78.233)))*43758.5453);
+  c*=1.+canv*((sin(q.x*1.6)+sin(q.y*1.6))*.07+(cn-.5)*.25);
+  c*=1.+vig*.9*smoothstep(.25,.85,distance(uv,vec2(.5)));
+  c=mix(c,vec3(luma(c)),mono); c=mix(c,vec3(luma(c))*vec3(1.2,1.,.8),sepia); if(poster>0.){float n=mix(32.,3.,poster);c=floor(c*n+.5)/n;}
+  float bd=min(min(uv.x,1.-uv.x),min(uv.y,1.-uv.y)); if(border>0.&&bd<border*.08) c=vec3(1.);
+  float n=fract(sin(dot(uv*vec2(1731.7,1327.3),vec2(12.9898,78.233)))*43758.5453);
+  c+=(n-.5)*grain*.3;
+  gl_FragColor=vec4(clamp(c,0.,1.),1.);
+}`;
+const VS = "attribute vec2 a;varying vec2 uv;void main(){uv=a*.5+.5;gl_Position=vec4(a,0.,1.);}";
+
+function initGL(){
+  gl = $("#cv").getContext("webgl", {preserveDrawingBuffer:true});
+  if(!gl){ alert("Is browser me WebGL nahi chal raha. Chrome use karo."); return false; }
+  const mk = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(s)); return s; };
+  prog = gl.createProgram();
+  gl.attachShader(prog, mk(gl.VERTEX_SHADER, VS)); gl.attachShader(prog, mk(gl.FRAGMENT_SHADER, FS));
+  gl.linkProgram(prog); gl.useProgram(prog);
+  const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,1,-1,-1,1,1,1]), gl.STATIC_DRAW);
+  const a = gl.getAttribLocation(prog, "a"); gl.enableVertexAttribArray(a); gl.vertexAttribPointer(a, 2, gl.FLOAT, false, 0, 0);
+  for(const k in SL) U[k] = gl.getUniformLocation(prog, k);
+  U.px = gl.getUniformLocation(prog, "px"); U.bands = gl.getUniformLocation(prog, "bands");
+  tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex);
+  for(const [p,v] of [[gl.TEXTURE_MIN_FILTER,gl.LINEAR],[gl.TEXTURE_MAG_FILTER,gl.LINEAR],[gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE],[gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, p, v);
+  const mkT = u => { gl.activeTexture(gl.TEXTURE0 + u); const x = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, x);
+    for(const [p,v] of [[gl.TEXTURE_MIN_FILTER,gl.LINEAR],[gl.TEXTURE_MAG_FILTER,gl.LINEAR],[gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE],[gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, p, v); return x; };
+  ctex = mkT(1); mtex = mkT(2); gl.activeTexture(gl.TEXTURE0);
+  U.cOn = gl.getUniformLocation(prog, "cOn"); U.showM = gl.getUniformLocation(prog, "showM");
+  gl.uniform1i(gl.getUniformLocation(prog, "cur"), 1); gl.uniform1i(gl.getUniformLocation(prog, "msk"), 2);
+  lut();
+  return true;
+}
+function schedule(){ if(!raf) raf = requestAnimationFrame(draw); }
+function draw(){
+  raf = 0; if(!orig) return;
+  const p = cmp ? DEF() : P;
+  for(const k in SL) gl.uniform1f(U[k], p[k]);
+  gl.uniform3fv(U.bands, new Float32Array(cmp ? 24 : HSL.flat()));
+  gl.uniform1f(U.cOn, !cmp && curOn ? 1 : 0); gl.uniform1f(U.showM, !cmp && tab === "sel" && selShow ? 1 : 0);
+  gl.uniform2f(U.px, 1/cw, 1/ch);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+}
+
+/* ---------- image load / crop / rotate ---------- */
+function loadFile(f){
+  if(!f) return;
+  const img = new Image();
+  img.onload = () => {
+    const MAX = Math.min(2560, gl.getParameter(gl.MAX_TEXTURE_SIZE));
+    const sc = Math.min(1, MAX / Math.max(img.naturalWidth, img.naturalHeight));
+    orig = document.createElement("canvas");
+    orig.width = Math.round(img.naturalWidth * sc); orig.height = Math.round(img.naturalHeight * sc);
+    orig.getContext("2d").drawImage(img, 0, 0, orig.width, orig.height);
+    URL.revokeObjectURL(img.src);
+    tf = {rot:0, fx:1, fy:1, ar:0}; P = DEF(); HSL = BANDS.map(() => [0,0,0]); preset = ""; curves = NC(); lut();
+    $("#empty").style.display = "none"; $("#cv").style.display = "block";
+    $("#hint").textContent = "Dabake rakho = original | 2 ungli = zoom | double tap = fit";
+    zReset(); build(); H = []; hi = -1; pushHist(); renderPanel();
+  };
+  img.onerror = () => alert("Ye photo khul nahi paayi. Dusri photo try karo.");
+  img.src = URL.createObjectURL(f);
+}
+function build(){
+  if(!orig) return;
+  const sw = orig.width, sh = orig.height, odd = tf.rot % 2;
+  const w = odd ? sh : sw, h = odd ? sw : sh;
+  const c = document.createElement("canvas"); c.width = w; c.height = h;
+  const x = c.getContext("2d");
+  x.translate(w/2, h/2); x.rotate(tf.rot * Math.PI/2); x.scale(tf.fx, tf.fy); x.drawImage(orig, -sw/2, -sh/2);
+  let w2 = w, h2 = h;
+  if(tf.ar){ if(w/h > tf.ar) w2 = Math.round(h * tf.ar); else h2 = Math.round(w / tf.ar); }
+  const o = document.createElement("canvas"); o.width = w2; o.height = h2;
+  o.getContext("2d").drawImage(c, (w-w2)/2, (h-h2)/2, w2, h2, 0, 0, w2, h2);
+  srcCv = o; cw = w2; ch = h2;
+  const cv = $("#cv"); cv.width = cw; cv.height = ch; gl.viewport(0, 0, cw, ch);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, o);
+  mkMask(); drawTxt(); schedule();
+}
+
+/* ---------- panels ---------- */
+const fmt = (k, v) => k === "hue" ? Math.round(v) : (+v).toFixed(2);
+function slHTML(attr, mn, mx, v){ const p = (v-mn)/(mx-mn), z = mn < 0 ? -mn/(mx-mn) : 0;
+  return `<div class="sl" ${attr} data-mn="${mn}" data-mx="${mx}"><i></i><b style="left:${Math.min(p,z)*100}%;width:${Math.abs(p-z)*100}%"></b><u style="left:${p*100}%"></u></div>`; }
+function slSet(s, v){ const mn = +s.dataset.mn, mx = +s.dataset.mx, p = (v-mn)/(mx-mn), z = mn < 0 ? -mn/(mx-mn) : 0, b = s.children[1];
+  b.style.left = Math.min(p,z)*100 + "%"; b.style.width = Math.abs(p-z)*100 + "%"; s.children[2].style.left = p*100 + "%"; }
+function sliderRow(k, val, attr){
+  const [lab, mn, mx] = SL[k];
+  return `<div class="row"><label data-k="${k}">${lab}</label>${slHTML(attr,mn,mx,val)}<output>${fmt(k,val)}</output></div>`;
+}
+function renderTabs(){
+  $("#tabs").innerHTML = Object.keys(TABS).map(t => `<button data-t="${t}" class="${t===tab?"on":""}">${TABS[t].name}</button>`).join("");
+}
+function renderPanel(){
+  renderTabs();
+  const el = $("#panel"); let h = "";
+  if(tab === "filters"){
+    h = `<div class="chips"><button data-p="" class="${preset===""?"on":""}">Original</button>` +
+      Object.keys(PRESETS).map(n => `<button data-p="${n}" class="${n===preset?"on":""}">${n}</button>`).join("") + `</div>`;
+  } else if(tab === "hsl"){
+    h = `<div class="chips">` + BANDS.map((b,i) => `<button class="sw ${i===band?"on":""}" data-b="${i}" aria-label="${b[0]}" style="background:hsl(${b[1]} 80% 55%)"></button>`).join("") + `</div>`;
+    ["Hue","Saturation","Luminance"].forEach((n,j) => {
+      h += `<div class="row"><label>${n}</label>${slHTML(`data-h="${j}"`,-1,1,HSL[band][j])}<output>${HSL[band][j].toFixed(2)}</output></div>`;
+    });
+  } else if(tab === "auto"){
+    h = `<div class="chips"><button data-x="smart">Smart adjust</button><button data-x="enh">Enhance quality</button></div><p style="color:var(--mut);font-size:13px;margin:4px 0">Ye AI nahi hai. Photo ki brightness/contrast auto set hoti hai, baad me sliders se badal sakte ho.</p>`;
+  } else if(tab === "curve"){
+    h = `<div class="chips">` + [["m","Master"],["r","Red"],["g","Green"],["b","Blue"]].map(c => `<button data-c="${c[0]}" class="${cc===c[0]?"on":""}">${c[1]}</button>`).join("") +
+      `<button data-c="reset">Reset</button></div><canvas id="cvc" width="320" height="320" style="width:160px;height:160px;touch-action:none;background:#14161b;border:1px solid var(--line);border-radius:8px"></canvas><span style="color:var(--mut);font-size:12px;margin-left:10px">Khali jagah dabao = point judega. Point pe tap = hat jayega. Drag = curve badlega.</span>`;
+  } else if(tab === "sel"){
+    h = `<div class="chips">` + [["brush","Brush"],["erase","Erase"],["radial","Radial"],["linear","Linear"]].map(t => `<button data-s="${t[0]}" class="${selTool===t[0]?"on":""}">${t[1]}</button>`).join("") +
+      `<button data-s="size">Size: ${brSz<.07?"S":brSz<.12?"M":"L"}</button><button data-s="show" class="${selShow?"on":""}">Mask</button><button data-s="clear">Clear</button></div>` +
+      `<p style="color:var(--mut);font-size:12px;margin:0 0 4px">Photo pe ungli se mask banao (laal hissa). Neeche ke sliders sirf us hisse pe lagenge.</p>` + TABS.sel.keys.map(k => sliderRow(k, P[k], `data-k="${k}"`)).join("");
+  } else if(tab === "retouch"){
+    h = `<p style="color:var(--mut);font-size:12px;margin:0 0 4px">Ye face detect nahi karta, skin ke rang se kaam karta hai. Sirf chehre pe lagana ho to Selective tab ka Soften / Sharpen brush use karo.</p>` + TABS.retouch.keys.map(k => sliderRow(k, P[k], `data-k="${k}"`)).join("");
+  } else if(tab === "text"){
+    h = `<input id="tin" placeholder="Yahan text likho" value="${TX.t.replace(/"/g, "&quot;")}"><div class="chips"><button data-y="sm">A-</button><button data-y="lg">A+</button><button data-y="bold" class="${TX.bold?"on":""}">Bold</button><button data-y="shadow" class="${TX.shadow?"on":""}">Shadow</button><button data-y="clear">Hatao</button></div><div class="chips">` +
+      ["sans-serif","Georgia, serif","monospace","cursive"].map((f, i) => `<button data-y="${f}" class="${TX.font===f?"on":""}">${["Sans","Serif","Mono","Script"][i]}</button>`).join("") +
+      ["#ffffff","#000000","#ffd23c","#ff4d6d","#4dd2ff","#7dff6b"].map(c => `<button class="sw ${TX.color===c?"on":""}" data-y="${c}" aria-label="${c}" style="background:${c}"></button>`).join("") +
+      `</div><p style="color:var(--mut);font-size:12px;margin:0">Photo pe ungli rakho ya ghumao, text wahan chala jayega.</p>`;
+  } else if(tab === "crop"){
+    h = `<div class="chips">` + ASPECTS.map(a => `<button data-a="${a[1]}" class="${tf.ar===a[1]?"on":""}">${a[0]}</button>`).join("") + `</div>
+      <div class="chips"><button data-x="rl">Rotate left</button><button data-x="rr">Rotate right</button><button data-x="fh">Flip H</button><button data-x="fv">Flip V</button></div>`;
+  } else {
+    h = TABS[tab].keys.map(k => sliderRow(k, P[k], `data-k="${k}"`)).join("");
+  }
+  el.innerHTML = h; drawCur();
+}
+
+/* ---------- events ---------- */
+$("#tabs").addEventListener("click", e => { const b = e.target.closest("button"); if(b){ tab = b.dataset.t; renderPanel(); } });
+/* slider: sirf drag (aage-peeche) se chalega, sirf touch/tap se nahi */
+let drag = null; const pan = $("#panel");
+pan.addEventListener("pointerdown", e => {
+  const s = e.target.closest(".sl"); if(!s) return;
+  drag = {s, x:e.clientX, v:s.dataset.k ? P[s.dataset.k] : HSL[band][+s.dataset.h], w:s.clientWidth, on:false};
+  try{ s.setPointerCapture(e.pointerId); }catch(_){}
+});
+pan.addEventListener("pointermove", e => {
+  if(!drag) return;
+  const d = e.clientX - drag.x; if(!drag.on && Math.abs(d) < 8) return; drag.on = true;
+  const s = drag.s, mn = +s.dataset.mn, mx = +s.dataset.mx;
+  let v = Math.min(mx, Math.max(mn, drag.v + d / drag.w * (mx - mn)));
+  if(Math.abs(v) < (mx-mn)*.008) v = 0;
+  const o = s.parentElement.querySelector("output");
+  if(s.dataset.k){ P[s.dataset.k] = v; o.textContent = fmt(s.dataset.k, v); }
+  else { HSL[band][+s.dataset.h] = v; o.textContent = v.toFixed(2); }
+  slSet(s, v); schedule();
+});
+const endDrag = () => { if(drag && drag.on) pushHist(); drag = null; };
+pan.addEventListener("pointerup", endDrag); pan.addEventListener("pointercancel", endDrag);
+let cdrag = null;
+const cpos = e => { const r = $("#cvc").getBoundingClientRect(); return [Math.min(1, Math.max(0, (e.clientX-r.left)/r.width)), Math.min(1, Math.max(0, 1-(e.clientY-r.top)/r.height))]; };
+pan.addEventListener("pointerdown", e => {
+  if(e.target.id !== "cvc") return;
+  const [x, y] = cpos(e), pts = curves[cc], r = e.target.getBoundingClientRect(); let tap = false;
+  let i = pts.findIndex(p => Math.hypot((p[0]-x)*r.width, (p[1]-y)*r.height) < 20);
+  if(i < 0){ const np = [x, y]; pts.push(np); pts.sort((a, b) => a[0]-b[0]); i = pts.indexOf(np); } else tap = i > 0 && i < pts.length-1;
+  cdrag = {i, tap, sx:e.clientX, sy:e.clientY, moved:false}; e.target.setPointerCapture(e.pointerId); drawCur(); lut(); schedule();
+});
+pan.addEventListener("pointermove", e => {
+  if(!cdrag) return; if(Math.hypot(e.clientX-cdrag.sx, e.clientY-cdrag.sy) < 6 && !cdrag.moved) return; cdrag.moved = true;
+  const pts = curves[cc], i = cdrag.i, n = pts.length, [x, y] = cpos(e);
+  pts[i][1] = y; if(i > 0 && i < n-1) pts[i][0] = Math.min(pts[i+1][0]-.02, Math.max(pts[i-1][0]+.02, x));
+  drawCur(); lut(); schedule();
+});
+const endC = () => { if(!cdrag) return; if(cdrag.tap && !cdrag.moved) curves[cc].splice(cdrag.i, 1); cdrag = null; drawCur(); lut(); schedule(); pushHist(); };
+pan.addEventListener("pointerup", endC); pan.addEventListener("pointercancel", endC);
+$("#panel").addEventListener("click", e => {
+  const t = e.target.closest("[data-p],[data-b],[data-a],[data-x],[data-s],[data-c],[data-y],label[data-k]"); if(!t) return;
+  setTimeout(pushHist);
+  if(t.dataset.s){ const k = t.dataset.s; if(k === "size") brSz = brSz < .07 ? .09 : brSz < .12 ? .16 : .04; else if(k === "show") selShow = !selShow; else if(k === "clear") mkMask(); else selTool = k; renderPanel(); schedule(); return; }
+  if(t.dataset.y){ const y = t.dataset.y;
+    if(y === "sm") TX.size = Math.max(.02, TX.size*.85); else if(y === "lg") TX.size = Math.min(.4, TX.size*1.18);
+    else if(y === "bold") TX.bold = !TX.bold; else if(y === "shadow") TX.shadow = !TX.shadow; else if(y === "clear") TX.t = "";
+    else if(y[0] === "#") TX.color = y; else TX.font = y;
+    drawTxt(); renderPanel(); return; }
+  if(t.dataset.c){ if(t.dataset.c === "reset") curves[cc] = [[0,0],[1,1]]; else cc = t.dataset.c; lut(); renderPanel(); schedule(); return; }
+  if(t.matches("label[data-k]")){ P[t.dataset.k] = DEF()[t.dataset.k]; renderPanel(); schedule(); return; }
+  if(t.dataset.p !== undefined){ preset = t.dataset.p; P = Object.assign(DEF(), PRESETS[preset] || {}); schedule(); renderPanel(); }
+  else if(t.dataset.b !== undefined){ band = +t.dataset.b; renderPanel(); }
+  else if(t.dataset.a !== undefined){ tf.ar = +t.dataset.a; build(); renderPanel(); }
+  else if(t.dataset.x){
+    const x = t.dataset.x;
+    if(x === "smart" || x === "enh"){ if(x === "smart") smart(); else Object.assign(P, {sharp:.35, texr:.25, struc:.2, vibrance:.2}); preset = ""; renderPanel(); schedule(); return; }
+    if(x === "rl") tf.rot = (tf.rot + 3) % 4; if(x === "rr") tf.rot = (tf.rot + 1) % 4;
+    if(x === "fh") tf.fx *= -1; if(x === "fv") tf.fy *= -1;
+    build();
+  }
+});
+$("#reset").onclick = () => { P = DEF(); HSL = BANDS.map(() => [0,0,0]); preset = ""; curves = NC(); lut(); renderPanel(); schedule(); setTimeout(pushHist); };
+$("#undo").onclick = () => goHist(hi-1); $("#redo").onclick = () => goHist(hi+1);
+$("#file").onchange = e => { loadFile(e.target.files[0]); e.target.value = ""; };
+
+/* press and hold on photo = show original */
+const st = $("#stage");
+st.addEventListener("pointerdown", e => { if(!orig) return; if(tab === "sel" || tab === "text"){ selDown(e); return; } cmp = true; schedule(); });
+st.addEventListener("pointermove", selMove);
+["pointerup","pointercancel"].forEach(ev => st.addEventListener(ev, () => { paint = null; }));
+["pointerup","pointercancel","pointerleave"].forEach(ev => st.addEventListener(ev, () => { if(cmp){ cmp = false; schedule(); } }));
+
+/* save */
+$("#save").onclick = () => {
+  if(!orig){ alert("Pehle photo kholo."); return; }
+  cmp = false; draw();
+  const z = document.createElement("canvas"); z.width = cw; z.height = ch; const zx = z.getContext("2d"); zx.drawImage($("#cv"), 0, 0); paintTxt(zx);
+  z.toBlob(b => {
+    const url = URL.createObjectURL(b);
+    const a = document.createElement("a"); a.href = url; a.download = "lumina-edit.jpg";
+    document.body.appendChild(a); a.click(); a.remove();
+    $("#out").src = url; $("#modal").style.display = "flex";   // fallback agar download na ho
+  }, "image/jpeg", .95);
+};
+$("#close").onclick = () => { $("#modal").style.display = "none"; };
+
+/* ---- pinch zoom / pan / double tap ---- */
+let Z = 1, PX = 0, PY = 0, pg = null, tapT = 0, tapPos = null, lastTap = 0; const ptrs = new Map();
+function zApply(){
+  const lx = (Z-1)*st.clientWidth/2, ly = (Z-1)*st.clientHeight/2;
+  PX = Math.max(-lx, Math.min(lx, PX)); PY = Math.max(-ly, Math.min(ly, PY));
+  const t = `translate(${PX}px,${PY}px) scale(${Z})`; $("#cv").style.transform = t; $("#ov").style.transform = t;
+}
+function zReset(){ Z = 1; PX = PY = 0; zApply(); }
+st.addEventListener("pointerdown", e => {
+  if(!orig) return; ptrs.set(e.pointerId, [e.clientX, e.clientY]);
+  if(ptrs.size === 2){
+    cmp = false; paint = null; tapPos = null; schedule();
+    const [a, b] = [...ptrs.values()], r = st.getBoundingClientRect();
+    pg = {d:Math.hypot(a[0]-b[0], a[1]-b[1]), z:Z, vx:(a[0]+b[0])/2 - r.left - r.width/2 - PX, vy:(a[1]+b[1])/2 - r.top - r.height/2 - PY};
+  } else if(ptrs.size === 1){
+    tapT = Date.now(); tapPos = [e.clientX, e.clientY];
+    if(Z > 1 && tab !== "sel" && tab !== "text"){ cmp = false; schedule(); pg = {one:true, px:e.clientX, py:e.clientY, ox:PX, oy:PY}; }
+  }
+});
+st.addEventListener("pointermove", e => {
+  if(!ptrs.has(e.pointerId)) return; ptrs.set(e.pointerId, [e.clientX, e.clientY]);
+  if(ptrs.size === 2 && pg && !pg.one){
+    const [a, b] = [...ptrs.values()], r = st.getBoundingClientRect(), d = Math.hypot(a[0]-b[0], a[1]-b[1]);
+    Z = Math.max(1, Math.min(8, pg.z * d / pg.d));
+    PX = (a[0]+b[0])/2 - r.left - r.width/2 - pg.vx * Z / pg.z; PY = (a[1]+b[1])/2 - r.top - r.height/2 - pg.vy * Z / pg.z; zApply();
+  } else if(pg && pg.one){ PX = pg.ox + e.clientX - pg.px; PY = pg.oy + e.clientY - pg.py; zApply(); }
+});
+["pointerup","pointercancel"].forEach(ev => st.addEventListener(ev, e => {
+  ptrs.delete(e.pointerId); pg = null;
+  if(ev === "pointerup" && orig && ptrs.size === 0 && tapPos && tab !== "sel" && tab !== "text" && Date.now() - tapT < 250 && Math.hypot(e.clientX-tapPos[0], e.clientY-tapPos[1]) < 10){
+    const n = Date.now();
+    if(n - lastTap < 350){ if(Z > 1) zReset(); else { Z = 2.5; zApply(); } lastTap = 0; } else lastTap = n;
+  }
+}));
+
+if(initGL()) renderPanel();
+</script>
+</body>
+</html>
